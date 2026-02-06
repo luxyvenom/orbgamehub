@@ -18,6 +18,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'OrbGameHub - Eye Fighter',
   description: 'AI Eye Staring Contest with WLD Betting. Prove you are human.',
+  icons: {
+    icon: '/favicon.png',
+  },
 };
 
 export default async function RootLayout({
