@@ -6,6 +6,7 @@ import {
   COUNTDOWN_SECONDS,
   GAME_MAX_DURATION,
   GAME_WALLET,
+  GRACE_PERIOD,
   VERIFY_ACTION,
 } from '@/lib/constants';
 import { Button, LiveFeedback } from '@worldcoin/mini-apps-ui-kit-react';
@@ -35,11 +36,13 @@ export default function EyeFighterPage() {
   const [verifyState, setVerifyState] = useState<'pending' | 'success' | 'failed' | undefined>();
   const [payState, setPayState] = useState<'pending' | 'success' | 'failed' | undefined>();
   const [txState, setTxState] = useState<'pending' | 'success' | 'failed' | undefined>();
+  const [inGracePeriod, setInGracePeriod] = useState(false);
 
   const gameActiveRef = useRef(false);
   const resultSetRef = useRef(false);
+  const gameStartTimeRef = useRef(0);
 
-  const { isReady, isBlinking, faceDetected, ear, resetBlinks } = useEyeDetection(
+  const { isReady, isBlinking, faceDetected, ear, error: eyeError, resetBlinks } = useEyeDetection(
     videoRef,
     phase === 'countdown' || phase === 'playing' || phase === 'ready'
   );
@@ -93,7 +96,6 @@ export default function EyeFighterPage() {
       });
 
       if (finalPayload.status === 'success') {
-        // Verify payment server-side
         const confirmRes = await fetch('/api/confirm-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -129,6 +131,7 @@ export default function EyeFighterPage() {
     setAiEyeOpen(true);
     setCountdown(COUNTDOWN_SECONDS);
     setGameTime(0);
+    setInGracePeriod(true);
     setPhase('countdown');
   }, [resetBlinks]);
 
@@ -136,7 +139,10 @@ export default function EyeFighterPage() {
     if (phase !== 'countdown') return;
 
     if (countdown <= 0) {
+      gameStartTimeRef.current = Date.now();
       setPhase('playing');
+      // Grace period: ignore blinks for first N seconds
+      setTimeout(() => setInGracePeriod(false), GRACE_PERIOD * 1000);
       return;
     }
 
@@ -151,7 +157,7 @@ export default function EyeFighterPage() {
     gameActiveRef.current = true;
     resultSetRef.current = false;
 
-    // AI blink timer
+    // AI blink timer — random between min and max
     const aiDelay =
       (Math.random() * (AI_BLINK_RANGE.max - AI_BLINK_RANGE.min) + AI_BLINK_RANGE.min) * 1000;
 
@@ -186,9 +192,9 @@ export default function EyeFighterPage() {
     };
   }, [phase]);
 
-  // Detect player blink during game
+  // Detect player blink during game (respects grace period)
   useEffect(() => {
-    if (phase !== 'playing') return;
+    if (phase !== 'playing' || inGracePeriod) return;
     if (isBlinking && !resultSetRef.current && gameActiveRef.current) {
       resultSetRef.current = true;
       gameActiveRef.current = false;
@@ -197,7 +203,7 @@ export default function EyeFighterPage() {
       setResult('lose');
       setPhase('result');
     }
-  }, [isBlinking, phase]);
+  }, [isBlinking, phase, inGracePeriod]);
 
   // --- SEND NOTIFICATION ---
   const sendResultNotification = useCallback(
@@ -219,7 +225,6 @@ export default function EyeFighterPage() {
     [betAmount, gameTime]
   );
 
-  // Send notification on result
   useEffect(() => {
     if (phase === 'result' && result) {
       sendResultNotification(result);
@@ -264,16 +269,23 @@ export default function EyeFighterPage() {
   // --- RENDER ---
   return (
     <div className="flex flex-col h-full w-full bg-black text-white">
-      {/* Camera (hidden during verify/bet, visible during game) */}
+      {/* Camera */}
       <video
         ref={videoRef}
         playsInline
         muted
-        className={`w-full aspect-[4/3] object-cover rounded-2xl ${
+        className={`w-full aspect-[4/3] object-cover rounded-b-2xl ${
           phase === 'verify' || phase === 'bet' ? 'hidden' : ''
         }`}
         style={{ transform: 'scaleX(-1)' }}
       />
+
+      {/* Error banner */}
+      {eyeError && (
+        <div className="bg-red-900/80 text-red-200 text-xs text-center py-2 px-4">
+          {eyeError}
+        </div>
+      )}
 
       <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
         {/* PHASE: VERIFY */}
@@ -378,47 +390,60 @@ export default function EyeFighterPage() {
 
         {/* PHASE: COUNTDOWN */}
         {phase === 'countdown' && (
-          <div className="text-8xl font-black animate-pulse">{countdown}</div>
+          <div className="text-center">
+            <div className="text-8xl font-black animate-pulse">{countdown}</div>
+            <p className="text-gray-500 text-sm mt-4">Get ready... keep your eyes open!</p>
+          </div>
         )}
 
         {/* PHASE: PLAYING */}
         {phase === 'playing' && (
           <>
-            {/* AI Eye */}
-            <div className="flex items-center gap-6">
+            {/* VS Display */}
+            <div className="flex items-center gap-8">
               <div className="text-center">
                 <div
-                  className={`text-6xl transition-all duration-200 ${
+                  className={`text-6xl transition-all duration-300 ${
                     aiEyeOpen ? 'scale-100' : 'scale-y-0'
                   }`}
                 >
                   👁
                 </div>
-                <p className="text-xs text-gray-400 mt-1">AI</p>
+                <p className="text-xs text-gray-400 mt-2 font-semibold">AI</p>
               </div>
-              <div className="text-2xl font-bold text-yellow-400">VS</div>
+              <div className="text-2xl font-black text-yellow-400">VS</div>
               <div className="text-center">
                 <div
-                  className={`text-6xl transition-all duration-200 ${
+                  className={`text-6xl transition-all duration-150 ${
                     isBlinking ? 'scale-y-0' : 'scale-100'
                   }`}
                 >
                   👁
                 </div>
-                <p className="text-xs text-gray-400 mt-1">YOU</p>
+                <p className="text-xs text-gray-400 mt-2 font-semibold">YOU</p>
               </div>
             </div>
 
-            <div className="text-3xl font-mono font-bold tabular-nums">
+            {/* Timer */}
+            <div className="text-4xl font-mono font-bold tabular-nums mt-2">
               {gameTime.toFixed(1)}s
             </div>
-            <p className="text-yellow-400 text-sm font-medium animate-pulse">
-              DON&apos;T BLINK!
-            </p>
 
-            {/* EAR debug (small) */}
-            <div className="text-xs text-gray-600">
-              EAR: {ear.toFixed(3)} | Face: {faceDetected ? 'Yes' : 'No'}
+            {/* Status */}
+            {inGracePeriod ? (
+              <p className="text-green-400 text-sm font-medium">Get ready...</p>
+            ) : (
+              <p className="text-yellow-400 text-sm font-medium animate-pulse">
+                DON&apos;T BLINK!
+              </p>
+            )}
+
+            {/* Subtle EAR indicator bar */}
+            <div className="w-full max-w-[200px] h-1 bg-gray-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-green-500 transition-all duration-100"
+                style={{ width: `${Math.min(ear / 0.4 * 100, 100)}%` }}
+              />
             </div>
           </>
         )}
@@ -436,7 +461,7 @@ export default function EyeFighterPage() {
                 ? 'YOU BLINKED!'
                 : 'DRAW!'}
             </h2>
-            <p className="text-gray-400">
+            <p className="text-gray-400 text-center">
               {result === 'win'
                 ? `AI blinked at ${gameTime.toFixed(1)}s! You win ${(betAmount * 2).toFixed(1)} WLD`
                 : result === 'lose'
@@ -466,6 +491,7 @@ export default function EyeFighterPage() {
                 setResult(null);
                 setGameTime(0);
                 setAiEyeOpen(true);
+                setInGracePeriod(false);
                 resetBlinks();
               }}
               size="lg"

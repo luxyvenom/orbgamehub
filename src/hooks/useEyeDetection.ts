@@ -10,8 +10,8 @@ import {
 const LEFT_EYE_IDX = [362, 385, 387, 263, 373, 380];
 const RIGHT_EYE_IDX = [33, 160, 158, 133, 153, 144];
 
-const EAR_THRESHOLD = 0.22;
-const BLINK_CONSEC_FRAMES = 2;
+const EAR_THRESHOLD = 0.21;
+const BLINK_CONSEC_FRAMES = 3;
 
 function computeEAR(landmarks: { x: number; y: number; z: number }[], indices: number[]): number {
   const p1 = landmarks[indices[0]];
@@ -66,7 +66,7 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
         await videoRef.current.play();
       }
     } catch (err) {
-      setState((s) => ({ ...s, error: `Camera error: ${err}` }));
+      setState((s) => ({ ...s, error: `Camera access denied. Please allow camera permission. (${err})` }));
     }
   }, [videoRef]);
 
@@ -75,21 +75,40 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
       const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
       );
-      const landmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-          delegate: 'GPU',
-        },
-        runningMode: 'VIDEO',
-        numFaces: 1,
-        outputFaceBlendshapes: false,
-        outputFacialTransformationMatrixes: false,
-      });
+
+      // Try GPU first, fall back to CPU
+      let landmarker: FaceLandmarker;
+      try {
+        landmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          outputFaceBlendshapes: false,
+          outputFacialTransformationMatrixes: false,
+        });
+      } catch {
+        // GPU failed, try CPU
+        landmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            delegate: 'CPU',
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          outputFaceBlendshapes: false,
+          outputFacialTransformationMatrixes: false,
+        });
+      }
+
       landmarkerRef.current = landmarker;
       setState((s) => ({ ...s, isReady: true }));
     } catch (err) {
-      setState((s) => ({ ...s, error: `Landmarker init error: ${err}` }));
+      setState((s) => ({ ...s, error: `Failed to load face detection model: ${err}` }));
     }
   }, []);
 

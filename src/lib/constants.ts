@@ -10,10 +10,13 @@ export const BET_OPTIONS = [
 export const GAME_WALLET = process.env.NEXT_PUBLIC_GAME_WALLET ?? '0x0000000000000000000000000000000000000000';
 
 // AI difficulty: min/max seconds before AI "blinks"
-export const AI_BLINK_RANGE = { min: 5, max: 15 };
+export const AI_BLINK_RANGE = { min: 4, max: 12 };
 
 // Game duration cap (seconds)
 export const GAME_MAX_DURATION = 20;
 
 // Countdown before game starts
 export const COUNTDOWN_SECONDS = 3;
+
+// Grace period after game starts where blinks are ignored (seconds)
+export const GRACE_PERIOD = 1.5;
