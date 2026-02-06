@@ -38,22 +38,6 @@ export const GameHub = () => {
         </div>
       </button>
 
-      {/* Coming Soon Games */}
-      <div className="w-full bg-gray-100 rounded-2xl p-6 opacity-60">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-3xl mb-2">🎮</div>
-            <h2 className="text-lg font-bold text-gray-800">Supersize</h2>
-            <p className="text-gray-500 text-sm mt-1">
-              Eat or be eaten. agar.io style.
-            </p>
-          </div>
-          <span className="bg-gray-300 px-3 py-1 rounded-full text-xs text-gray-600">
-            Coming Soon
-          </span>
-        </div>
-      </div>
-
       {/* World ID Section */}
       <div className="w-full">
         <Verify />
