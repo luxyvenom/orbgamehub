@@ -10,8 +10,15 @@ import {
 const LEFT_EYE_IDX = [362, 385, 387, 263, 373, 380];
 const RIGHT_EYE_IDX = [33, 160, 158, 133, 153, 144];
 
-const EAR_THRESHOLD = 0.21;
-const BLINK_CONSEC_FRAMES = 3;
+// All eye contour landmarks for drawing
+const LEFT_EYE_CONTOUR = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
+const RIGHT_EYE_CONTOUR = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
+const LEFT_IRIS = [474, 475, 476, 477];
+const RIGHT_IRIS = [469, 470, 471, 472];
+
+// Tuned: low enough to ignore squinting, 2 frames for minimal debounce (~66ms)
+const EAR_THRESHOLD = 0.19;
+const BLINK_CONSEC_FRAMES = 2;
 
 function computeEAR(landmarks: { x: number; y: number; z: number }[], indices: number[]): number {
   const p1 = landmarks[indices[0]];
@@ -29,6 +36,64 @@ function computeEAR(landmarks: { x: number; y: number; z: number }[], indices: n
   return (vertical1 + vertical2) / (2.0 * horizontal);
 }
 
+function drawEyeTracking(
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  landmarks: { x: number; y: number; z: number }[]
+) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const w = canvas.width;
+  const h = canvas.height;
+
+  const drawContour = (indices: number[], color: string) => {
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < indices.length; i++) {
+      const pt = landmarks[indices[i]];
+      const x = pt.x * w;
+      const y = pt.y * h;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  };
+
+  const drawIris = (indices: number[], color: string) => {
+    for (const idx of indices) {
+      const pt = landmarks[idx];
+      ctx.beginPath();
+      ctx.fillStyle = color;
+      ctx.arc(pt.x * w, pt.y * h, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  const drawKeyPoints = (indices: number[], color: string) => {
+    for (const idx of indices) {
+      const pt = landmarks[idx];
+      ctx.beginPath();
+      ctx.fillStyle = color;
+      ctx.arc(pt.x * w, pt.y * h, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  drawContour(LEFT_EYE_CONTOUR, '#00ff88');
+  drawContour(RIGHT_EYE_CONTOUR, '#00ff88');
+  drawIris(LEFT_IRIS, '#00ffff');
+  drawIris(RIGHT_IRIS, '#00ffff');
+  drawKeyPoints(LEFT_EYE_IDX, '#44ff44');
+  drawKeyPoints(RIGHT_EYE_IDX, '#44ff44');
+}
+
 export interface EyeDetectionState {
   isReady: boolean;
   isBlinking: boolean;
@@ -38,7 +103,19 @@ export interface EyeDetectionState {
   faceDetected: boolean;
 }
 
-export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | null>, active: boolean) {
+export function useEyeDetection(
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+  canvasRef: React.RefObject<HTMLCanvasElement | null>,
+  active: boolean,
+  onBlinkDetected?: () => void
+) {
+  const onBlinkRef = useRef(onBlinkDetected);
+  onBlinkRef.current = onBlinkDetected;
+
+  // Use ref for active so detect() doesn't recreate on phase changes
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
   const [state, setState] = useState<EyeDetectionState>({
     isReady: false,
     isBlinking: false,
@@ -54,8 +131,10 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
   const consecFramesRef = useRef(0);
   const blinkCountRef = useRef(0);
   const lastBlinkRef = useRef(false);
+  const initedRef = useRef(false);
 
   const initCamera = useCallback(async () => {
+    if (streamRef.current) return; // Already initialized
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: 640, height: 480 },
@@ -71,12 +150,12 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
   }, [videoRef]);
 
   const initLandmarker = useCallback(async () => {
+    if (landmarkerRef.current) return; // Already initialized
     try {
       const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
       );
 
-      // Try GPU first, fall back to CPU
       let landmarker: FaceLandmarker;
       try {
         landmarker = await FaceLandmarker.createFromOptions(vision, {
@@ -91,7 +170,6 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
           outputFacialTransformationMatrixes: false,
         });
       } catch {
-        // GPU failed, try CPU
         landmarker = await FaceLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath:
@@ -112,8 +190,13 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
     }
   }, []);
 
+  // Stable detect function - uses refs instead of state to avoid recreating
   const detect = useCallback(() => {
-    if (!landmarkerRef.current || !videoRef.current || !active) return;
+    if (!landmarkerRef.current || !videoRef.current || !activeRef.current) {
+      // Keep looping even if not active, so we resume instantly on phase change
+      animFrameRef.current = requestAnimationFrame(detect);
+      return;
+    }
 
     const video = videoRef.current;
     if (video.readyState < 2) {
@@ -128,6 +211,11 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
 
     if (result.faceLandmarks && result.faceLandmarks.length > 0) {
       const landmarks = result.faceLandmarks[0];
+
+      if (canvasRef.current && video) {
+        drawEyeTracking(canvasRef.current, video, landmarks);
+      }
+
       const leftEAR = computeEAR(landmarks, LEFT_EYE_IDX);
       const rightEAR = computeEAR(landmarks, RIGHT_EYE_IDX);
       const avgEAR = (leftEAR + rightEAR) / 2;
@@ -146,6 +234,11 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
       const isBlinking = consecFramesRef.current >= BLINK_CONSEC_FRAMES;
       lastBlinkRef.current = isBlinking;
 
+      // Fire callback synchronously in rAF
+      if (isBlinking && onBlinkRef.current) {
+        onBlinkRef.current();
+      }
+
       setState((s) => ({
         ...s,
         ear: avgEAR,
@@ -154,29 +247,36 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
         faceDetected: true,
       }));
     } else {
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
       setState((s) => ({ ...s, faceDetected: false }));
     }
 
     animFrameRef.current = requestAnimationFrame(detect);
-  }, [active, videoRef]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoRef, canvasRef]); // Only depend on refs, NOT active
 
+  // Initialize once when active becomes true, never re-init on phase changes
   useEffect(() => {
     if (!active) return;
-
-    let mounted = true;
+    if (initedRef.current) return; // Already initialized
+    initedRef.current = true;
 
     const setup = async () => {
       await initLandmarker();
       await initCamera();
-      if (mounted) {
-        animFrameRef.current = requestAnimationFrame(detect);
-      }
+      animFrameRef.current = requestAnimationFrame(detect);
     };
 
     setup();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
+  // Cleanup only on unmount
+  useEffect(() => {
     return () => {
-      mounted = false;
       cancelAnimationFrame(animFrameRef.current);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -187,7 +287,7 @@ export function useEyeDetection(videoRef: React.RefObject<HTMLVideoElement | nul
         landmarkerRef.current = null;
       }
     };
-  }, [active, initCamera, initLandmarker, detect]);
+  }, []);
 
   const resetBlinks = useCallback(() => {
     blinkCountRef.current = 0;
