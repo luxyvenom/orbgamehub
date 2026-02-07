@@ -85,10 +85,16 @@ export default function PvpGamePage() {
 
   // Handle blink detection
   const handleBlinkDetected = useCallback(() => {
+    console.log('[BLINK] detected!', {
+      phase: localPhaseRef.current,
+      grace: inGracePeriodRef.current,
+      reported: blinkReportedRef.current,
+    });
     if (localPhaseRef.current !== 'playing') return;
     if (inGracePeriodRef.current) return;
     if (blinkReportedRef.current) return;
     blinkReportedRef.current = true;
+    console.log('[BLINK] reporting to server...');
     reportBlink();
   }, [reportBlink]);
 
