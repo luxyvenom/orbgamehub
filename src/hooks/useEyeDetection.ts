@@ -16,9 +16,8 @@ const RIGHT_EYE_CONTOUR = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 1
 const LEFT_IRIS = [474, 475, 476, 477];
 const RIGHT_IRIS = [469, 470, 471, 472];
 
-// Tuned: low enough to ignore squinting, 2 frames for minimal debounce (~66ms)
-const EAR_THRESHOLD = 0.19;
-const BLINK_CONSEC_FRAMES = 2;
+// Catches squinting (실눈). Normal open eyes ~0.28-0.40. Instant detection.
+const EAR_THRESHOLD = 0.25;
 
 function computeEAR(landmarks: { x: number; y: number; z: number }[], indices: number[]): number {
   const p1 = landmarks[indices[0]];
@@ -128,9 +127,8 @@ export function useEyeDetection(
   const landmarkerRef = useRef<FaceLandmarker | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number>(0);
-  const consecFramesRef = useRef(0);
+  const blinkFiredRef = useRef(false);
   const blinkCountRef = useRef(0);
-  const lastBlinkRef = useRef(false);
   const initedRef = useRef(false);
 
   const initCamera = useCallback(async () => {
@@ -222,22 +220,19 @@ export function useEyeDetection(
 
       const eyesClosed = avgEAR < EAR_THRESHOLD;
 
-      if (eyesClosed) {
-        consecFramesRef.current++;
-      } else {
-        if (consecFramesRef.current >= BLINK_CONSEC_FRAMES && lastBlinkRef.current) {
-          blinkCountRef.current++;
+      // Instant detection: fire on the FIRST frame eyes drop below threshold
+      if (eyesClosed && !blinkFiredRef.current) {
+        blinkFiredRef.current = true;
+        blinkCountRef.current++;
+        if (onBlinkRef.current) {
+          onBlinkRef.current();
         }
-        consecFramesRef.current = 0;
+      }
+      if (!eyesClosed) {
+        blinkFiredRef.current = false;
       }
 
-      const isBlinking = consecFramesRef.current >= BLINK_CONSEC_FRAMES;
-      lastBlinkRef.current = isBlinking;
-
-      // Fire callback synchronously in rAF
-      if (isBlinking && onBlinkRef.current) {
-        onBlinkRef.current();
-      }
+      const isBlinking = eyesClosed;
 
       setState((s) => ({
         ...s,
@@ -255,8 +250,7 @@ export function useEyeDetection(
     }
 
     animFrameRef.current = requestAnimationFrame(detect);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoRef, canvasRef]); // Only depend on refs, NOT active
+  }, [videoRef, canvasRef]);
 
   // Initialize once when active becomes true, never re-init on phase changes
   useEffect(() => {
@@ -271,8 +265,7 @@ export function useEyeDetection(
     };
 
     setup();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cleanup only on unmount
   useEffect(() => {
@@ -291,8 +284,7 @@ export function useEyeDetection(
 
   const resetBlinks = useCallback(() => {
     blinkCountRef.current = 0;
-    consecFramesRef.current = 0;
-    lastBlinkRef.current = false;
+    blinkFiredRef.current = false;
     setState((s) => ({ ...s, blinkCount: 0, isBlinking: false }));
   }, []);
 

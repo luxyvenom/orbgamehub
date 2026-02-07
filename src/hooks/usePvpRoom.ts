@@ -16,9 +16,6 @@ interface UsePvpRoomReturn {
 
 export function usePvpRoom(
   roomId: string | null,
-  forceRole?: string,
-  isDemo?: boolean,
-  demoId?: string
 ): UsePvpRoomReturn {
   const [room, setRoom] = useState<PvpRoom | null>(null);
   const [myRole, setMyRole] = useState<PlayerRole | null>(null);
@@ -29,20 +26,10 @@ export function usePvpRoom(
   roomIdRef.current = roomId;
   const blinkReportedRef = useRef(false);
 
-  // Build query params for all API calls
-  const buildParams = useCallback((base: string) => {
-    const parts = [base];
-    if (forceRole) parts.push(`role=${forceRole}`);
-    if (isDemo) parts.push('demo=true');
-    if (demoId) parts.push(`demoId=${demoId}`);
-    return parts.length > 1 ? parts.join('&') : base;
-  }, [forceRole, isDemo, demoId]);
-
   const fetchStatus = useCallback(async () => {
     if (!roomIdRef.current) return;
     try {
-      const params = buildParams(`roomId=${roomIdRef.current}`);
-      const res = await fetch(`/api/pvp/room-status?${params}`);
+      const res = await fetch(`/api/pvp/room-status?roomId=${roomIdRef.current}`);
       if (!res.ok) {
         const data = await res.json();
         setError(data.error || 'Failed to fetch room');
@@ -63,7 +50,7 @@ export function usePvpRoom(
     } catch {
       setError('Network error');
     }
-  }, [buildParams]);
+  }, []);
 
   // Start polling
   useEffect(() => {
@@ -85,66 +72,53 @@ export function usePvpRoom(
 
   const markReady = useCallback(async () => {
     if (!roomIdRef.current) return;
-    const params = buildParams('');
-    const qs = params ? `?${params}` : '';
     try {
-      await fetch(`/api/pvp/player-ready${qs}`, {
+      await fetch('/api/pvp/player-ready', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId: roomIdRef.current }),
       });
     } catch { /* best effort */ }
-  }, [buildParams]);
+  }, []);
 
   const reportBlink = useCallback(async () => {
-    console.log('[reportBlink] called', { roomId: roomIdRef.current, alreadyReported: blinkReportedRef.current });
     if (!roomIdRef.current || blinkReportedRef.current) return;
     blinkReportedRef.current = true;
-    const params = buildParams('');
-    const qs = params ? `?${params}` : '';
     try {
-      const res = await fetch(`/api/pvp/report-blink${qs}`, {
+      await fetch('/api/pvp/report-blink', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId: roomIdRef.current }),
       });
-      const data = await res.json();
-      console.log('[reportBlink] response', res.status, data);
-    } catch (err) {
-      console.error('[reportBlink] error', err);
-    }
-  }, [buildParams]);
+    } catch { /* best effort */ }
+  }, []);
 
   const disconnect = useCallback(async () => {
     if (!roomIdRef.current) return;
     if (pollRef.current) clearInterval(pollRef.current);
-    const params = buildParams('');
-    const qs = params ? `?${params}` : '';
     try {
-      await fetch(`/api/pvp/report-disconnect${qs}`, {
+      await fetch('/api/pvp/report-disconnect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId: roomIdRef.current }),
       });
     } catch { /* best effort */ }
-  }, [buildParams]);
+  }, []);
 
   // beforeunload → disconnect via sendBeacon
   useEffect(() => {
     if (!roomId) return;
     const handleUnload = () => {
       if (roomIdRef.current) {
-        const params = buildParams('');
-        const qs = params ? `?${params}` : '';
         navigator.sendBeacon(
-          `/api/pvp/report-disconnect${qs}`,
+          '/api/pvp/report-disconnect',
           JSON.stringify({ roomId: roomIdRef.current })
         );
       }
     };
     window.addEventListener('beforeunload', handleUnload);
     return () => window.removeEventListener('beforeunload', handleUnload);
-  }, [roomId, buildParams]);
+  }, [roomId]);
 
   return { room, myRole, error, loading, markReady, reportBlink, disconnect };
 }

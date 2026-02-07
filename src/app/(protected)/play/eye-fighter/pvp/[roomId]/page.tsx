@@ -9,13 +9,13 @@ import { useEyeDetection } from '@/hooks/useEyeDetection';
 import { usePvpRoom } from '@/hooks/usePvpRoom';
 import {
   GRACE_PERIOD,
+  PVP_BET_AMOUNT,
   PVP_COUNTDOWN_SECONDS,
-  PVP_MAX_DURATION,
   PVP_WIN_AMOUNT,
 } from '@/lib/constants';
 import { Button, LiveFeedback } from '@worldcoin/mini-apps-ui-kit-react';
 import { MiniKit } from '@worldcoin/minikit-js';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 type LocalPhase = 'waiting' | 'ready' | 'countdown' | 'playing' | 'result';
@@ -23,13 +23,9 @@ type LocalPhase = 'waiting' | 'ready' | 'countdown' | 'playing' | 'result';
 export default function PvpGamePage() {
   const router = useRouter();
   const params = useParams();
-  const searchParams = useSearchParams();
   const roomId = params.roomId as string;
-  const forceRole = searchParams.get('role') || undefined;
-  const isDemo = searchParams.get('demo') === 'true';
-  const demoId = searchParams.get('demoId') || undefined;
 
-  const { room, myRole, error: roomError, loading, markReady, reportBlink, disconnect } = usePvpRoom(roomId, forceRole, isDemo, demoId);
+  const { room, myRole, error: roomError, loading, markReady, reportBlink, disconnect } = usePvpRoom(roomId);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -39,8 +35,11 @@ export default function PvpGamePage() {
   const [gameTime, setGameTime] = useState(0);
   const [inGracePeriod, setInGracePeriod] = useState(false);
   const [txState, setTxState] = useState<'pending' | 'success' | 'failed' | undefined>();
+  const [refundTxState, setRefundTxState] = useState<'pending' | 'success' | 'failed' | undefined>();
   const [readySent, setReadySent] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [rematchState, setRematchState] = useState<'idle' | 'searching' | 'failed'>('idle');
+  const [localBlinked, setLocalBlinked] = useState(false); // Instant local loss flag
 
   const gameTimerRef = useRef<ReturnType<typeof setInterval>>(null);
   const localPhaseRef = useRef(localPhase);
@@ -73,7 +72,10 @@ export default function PvpGamePage() {
           setLocalPhase('playing');
           setInGracePeriod(true);
           blinkReportedRef.current = false;
-          setTimeout(() => setInGracePeriod(false), GRACE_PERIOD * 1000);
+          setTimeout(() => {
+            setInGracePeriod(false);
+            resetBlinks(); // Reset detection so blinks during grace period don't block future detection
+          }, GRACE_PERIOD * 1000);
         }
         break;
       case 'finished':
@@ -83,18 +85,17 @@ export default function PvpGamePage() {
     }
   }, [room]);
 
-  // Handle blink detection
+  // Handle blink detection — end game IMMEDIATELY like AI mode, then report to server
   const handleBlinkDetected = useCallback(() => {
-    console.log('[BLINK] detected!', {
-      phase: localPhaseRef.current,
-      grace: inGracePeriodRef.current,
-      reported: blinkReportedRef.current,
-    });
     if (localPhaseRef.current !== 'playing') return;
     if (inGracePeriodRef.current) return;
     if (blinkReportedRef.current) return;
     blinkReportedRef.current = true;
-    console.log('[BLINK] reporting to server...');
+    // Instant local game over (same as AI mode)
+    if (gameTimerRef.current) clearInterval(gameTimerRef.current);
+    setLocalBlinked(true);
+    setLocalPhase('result');
+    // Report to server in background
     reportBlink();
   }, [reportBlink]);
 
@@ -123,7 +124,10 @@ export default function PvpGamePage() {
       setLocalPhase('playing');
       setInGracePeriod(true);
       blinkReportedRef.current = false;
-      setTimeout(() => setInGracePeriod(false), GRACE_PERIOD * 1000);
+      setTimeout(() => {
+        setInGracePeriod(false);
+        resetBlinks(); // Reset detection after grace period
+      }, GRACE_PERIOD * 1000);
       return;
     }
     const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
@@ -144,18 +148,12 @@ export default function PvpGamePage() {
   }, [localPhase]);
 
   // Claim winnings via smart contract
-  const handleClaim = useCallback(async () => {
-    setTxState('pending');
+  const claimFromServer = useCallback(async (
+    setStateFn: (s: 'pending' | 'success' | 'failed' | undefined) => void
+  ) => {
+    setStateFn('pending');
     try {
-      // Build URL params for auth
-      const claimParams = new URLSearchParams();
-      if (forceRole) claimParams.set('role', forceRole);
-      if (isDemo) claimParams.set('demo', 'true');
-      if (demoId) claimParams.set('demoId', demoId);
-      const qs = claimParams.toString() ? `?${claimParams.toString()}` : '';
-
-      // Get claim signature from server
-      const res = await fetch(`/api/pvp/claim-winnings${qs}`, {
+      const res = await fetch('/api/pvp/claim-winnings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId }),
@@ -163,18 +161,11 @@ export default function PvpGamePage() {
       const data = await res.json();
 
       if (!res.ok) {
-        setTxState('failed');
-        setTimeout(() => setTxState(undefined), 3000);
+        setStateFn('failed');
+        setTimeout(() => setStateFn(undefined), 3000);
         return;
       }
 
-      // Demo mode: simulate success
-      if (data.demo) {
-        setTxState('success');
-        return;
-      }
-
-      // Call smart contract via MiniKit
       const { finalPayload } = await MiniKit.commandsAsync.sendTransaction({
         transaction: [
           {
@@ -199,16 +190,29 @@ export default function PvpGamePage() {
       });
 
       if (finalPayload.status === 'success') {
-        setTxState('success');
+        setStateFn('success');
       } else {
-        setTxState('failed');
-        setTimeout(() => setTxState(undefined), 3000);
+        setStateFn('failed');
+        setTimeout(() => setStateFn(undefined), 3000);
       }
     } catch {
-      setTxState('failed');
-      setTimeout(() => setTxState(undefined), 3000);
+      setStateFn('failed');
+      setTimeout(() => setStateFn(undefined), 3000);
     }
-  }, [roomId, forceRole, isDemo, demoId]);
+  }, [roomId]);
+
+  const handleClaim = useCallback(() => claimFromServer(setTxState), [claimFromServer]);
+  const handleRefund = useCallback(() => claimFromServer(setRefundTxState), [claimFromServer]);
+
+  const handlePlayAgain = useCallback(() => {
+    setRematchState('searching');
+    setTimeout(() => {
+      setRematchState('failed');
+      setTimeout(() => {
+        router.push('/play/eye-fighter/pvp');
+      }, 2000);
+    }, 3000);
+  }, [router]);
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(roomId).catch(() => {});
@@ -216,10 +220,12 @@ export default function PvpGamePage() {
     setTimeout(() => setCopyFeedback(false), 2000);
   };
 
-  // Determine result
-  const isWinner = room?.winner === myRole;
-  const isDraw = room?.winner === 'draw';
-  const isLoser = room?.winner && room.winner !== 'draw' && room.winner !== myRole;
+  // Determine result — localBlinked stops game instantly, server decides actual result
+  const serverResultReady = room?.winner != null;
+  const isWinner = serverResultReady && room.winner === myRole;
+  const isDraw = serverResultReady && room.winner === 'draw';
+  const isLoser = serverResultReady && room.winner !== 'draw' && room.winner !== myRole;
+  const waitingForResult = localBlinked && !serverResultReady;
 
   const opponentName = myRole === 'p1'
     ? (room?.p2_username || 'Waiting...')
@@ -408,46 +414,86 @@ export default function PvpGamePage() {
       {/* Result */}
       {localPhase === 'result' && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
-          <div className="text-6xl mb-2">
-            {isWinner ? '🏆' : isDraw ? '🤝' : '😵'}
-          </div>
-          <h2 className="text-2xl font-bold">
-            {isWinner ? 'YOU WIN!' : isDraw ? 'DRAW!' : 'YOU LOST!'}
-          </h2>
-          <p className="text-gray-400 text-center">
-            {isWinner
-              ? `Opponent blinked! You win ${PVP_WIN_AMOUNT} WLD`
-              : isDraw
-              ? `Both held for ${PVP_MAX_DURATION}s. Bets returned.`
-              : isLoser
-              ? 'You blinked first. Better luck next time!'
-              : 'Game ended.'}
-          </p>
+          {waitingForResult ? (
+            <>
+              <div className="text-6xl mb-2 animate-pulse">⏳</div>
+              <h2 className="text-2xl font-bold">Determining result...</h2>
+              <p className="text-gray-400 text-center text-sm">Checking opponent status</p>
+            </>
+          ) : (
+            <>
+              <div className="text-6xl mb-2">
+                {isWinner ? '🏆' : isDraw ? '🤝' : '😵'}
+              </div>
+              <h2 className="text-2xl font-bold">
+                {isWinner ? 'YOU WIN!' : isDraw ? 'DRAW!' : 'YOU LOST!'}
+              </h2>
+              <p className="text-gray-400 text-center">
+                {isWinner
+                  ? `Opponent blinked! You win ${PVP_WIN_AMOUNT} WLD`
+                  : isDraw
+                  ? 'Both blinked at the same time! Bets returned.'
+                  : isLoser
+                  ? 'You blinked first. Better luck next time!'
+                  : 'Game ended.'}
+              </p>
 
-          {isWinner && (
-            <LiveFeedback
-              label={{ failed: 'Claim failed', pending: 'Claiming...', success: 'Claimed!' }}
-              state={txState}
-              className="w-full"
-            >
-              <Button onClick={handleClaim} size="lg" variant="primary" className="w-full">
-                Claim {PVP_WIN_AMOUNT} WLD
+              {isWinner && (
+                <LiveFeedback
+                  label={{ failed: 'Claim failed', pending: 'Claiming...', success: 'Claimed!' }}
+                  state={txState}
+                  className="w-full"
+                >
+                  <Button onClick={handleClaim} size="lg" variant="primary" className="w-full">
+                    Claim {PVP_WIN_AMOUNT} WLD
+                  </Button>
+                </LiveFeedback>
+              )}
+
+              {isDraw && (
+                <LiveFeedback
+                  label={{ failed: 'Refund failed', pending: 'Refunding...', success: 'Refunded!' }}
+                  state={refundTxState}
+                  className="w-full"
+                >
+                  <Button onClick={handleRefund} size="lg" variant="primary" className="w-full">
+                    Claim Refund {PVP_BET_AMOUNT} WLD
+                  </Button>
+                </LiveFeedback>
+              )}
+
+              {rematchState === 'idle' && (
+                <Button
+                  onClick={handlePlayAgain}
+                  size="lg" variant="tertiary" className="w-full"
+                >
+                  Play Again
+                </Button>
+              )}
+              {rematchState === 'searching' && (
+                <div className="w-full flex flex-col items-center gap-2 py-3">
+                  <div className="flex items-center gap-2 text-purple-400">
+                    <span className="material-symbols-outlined" style={{ fontSize: '20px', animation: 'pulse 1.5s infinite' }}>hourglass_top</span>
+                    <span className="text-sm font-semibold">Searching for opponent...</span>
+                  </div>
+                </div>
+              )}
+              {rematchState === 'failed' && (
+                <div className="w-full flex flex-col items-center gap-2 py-3">
+                  <div className="flex items-center gap-2 text-red-400">
+                    <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>close</span>
+                    <span className="text-sm font-semibold">Matching failed. Redirecting to lobby...</span>
+                  </div>
+                </div>
+              )}
+              <Button
+                onClick={() => router.push('/play/eye-fighter/pvp')}
+                size="lg" variant="tertiary" className="w-full"
+              >
+                Back to Lobby
               </Button>
-            </LiveFeedback>
+            </>
           )}
-
-          <Button
-            onClick={() => router.push('/play/eye-fighter/pvp?action=create')}
-            size="lg" variant="tertiary" className="w-full"
-          >
-            Play Again
-          </Button>
-          <Button
-            onClick={() => router.push('/play/eye-fighter')}
-            size="lg" variant="tertiary" className="w-full"
-          >
-            Back to Mode Select
-          </Button>
         </div>
       )}
     </div>

@@ -19,9 +19,8 @@ export async function POST(req: NextRequest) {
     );
 
     if (!response.ok) {
-      // For demo/dev, allow pass-through if API key not set
       if (!process.env.DEV_PORTAL_API_KEY) {
-        return NextResponse.json({ success: true, demo: true });
+        return NextResponse.json({ success: false, error: 'Payment verification not configured' }, { status: 500 });
       }
       return NextResponse.json({ success: false, error: 'Verification failed' }, { status: 400 });
     }

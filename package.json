@@ -10,10 +10,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "compile": "node scripts/compile.cjs",
+    "deploy:testnet": "node scripts/compile.cjs && node scripts/deploy.cjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.32",
+    "@upstash/redis": "^1.36.2",
     "@worldcoin/mini-apps-ui-kit-react": "^1.0.2",
     "@worldcoin/minikit-js": "latest",
     "@worldcoin/minikit-react": "latest",
@@ -32,9 +35,11 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.2.4",
     "eruda": "^3.4.1",
     "eslint": "^9",
     "eslint-config-next": "15.2.3",
+    "solc": "^0.8.24",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

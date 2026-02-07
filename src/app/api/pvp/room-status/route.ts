@@ -33,13 +33,9 @@ export async function GET(req: NextRequest) {
       if (r2) room.p2_ready = true;
     }
 
-    // Determine role
-    const forceRole = req.nextUrl.searchParams.get('role') as PlayerRole | null;
+    // Determine role by wallet address
     let myRole: PlayerRole;
-
-    if (forceRole === 'p2' && room.p2_wallet === user.wallet) {
-      myRole = 'p2';
-    } else if (room.p1_wallet === user.wallet) {
+    if (room.p1_wallet === user.wallet) {
       myRole = 'p1';
     } else if (room.p2_wallet === user.wallet) {
       myRole = 'p2';

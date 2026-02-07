@@ -27,8 +27,9 @@ export async function POST(req: NextRequest) {
     if (room.status === 'playing') {
       // OK
     } else if (room.status === 'countdown' && room.gameStartTime && Date.now() >= room.gameStartTime) {
-      // Countdown expired but room-status hasn't polled yet to transition — treat as playing
       room.status = 'playing';
+    } else if (room.status === 'finished') {
+      return NextResponse.json({ room });
     } else {
       return NextResponse.json({ error: 'Game is not in playing phase' }, { status: 400 });
     }
@@ -40,48 +41,64 @@ export async function POST(req: NextRequest) {
     const now = Date.now();
     const blinkTime = room.gameStartTime ? (now - room.gameStartTime) / 1000 : 0;
 
-    // TEST MODE: support ?role=p2 for same-user testing
-    const url = new URL(req.url);
-    const forceRole = url.searchParams.get('role');
-
-    if (forceRole === 'p2' && room.p2_wallet === user.wallet) {
-      if (room.p2_blinked) return NextResponse.json({ room });
-      room.p2_blinked = true;
-      room.p2_blinkTime = blinkTime;
-    } else if (room.p1_wallet === user.wallet && forceRole !== 'p2') {
-      if (room.p1_blinked) return NextResponse.json({ room });
-      room.p1_blinked = true;
-      room.p1_blinkTime = blinkTime;
+    // Determine role by wallet address
+    let myRole: 'p1' | 'p2';
+    if (room.p1_wallet === user.wallet) {
+      myRole = 'p1';
     } else if (room.p2_wallet === user.wallet) {
-      if (room.p2_blinked) return NextResponse.json({ room });
-      room.p2_blinked = true;
-      room.p2_blinkTime = blinkTime;
+      myRole = 'p2';
     } else {
       return NextResponse.json({ error: 'Not in this room' }, { status: 403 });
     }
 
-    // Determine winner
-    if (room.p1_blinked && room.p2_blinked) {
-      const diff = Math.abs((room.p1_blinkTime ?? 0) - (room.p2_blinkTime ?? 0));
-      if (diff <= PVP_DRAW_THRESHOLD) {
-        room.winner = 'draw';
-      } else if ((room.p1_blinkTime ?? 0) < (room.p2_blinkTime ?? 0)) {
-        room.winner = 'p2';
-      } else {
-        room.winner = 'p1';
-      }
-      room.status = 'finished';
-    } else if (room.p1_blinked && !room.p2_blinked) {
-      room.winner = 'p2';
-      room.status = 'finished';
-    } else if (!room.p1_blinked && room.p2_blinked) {
-      room.winner = 'p1';
-      room.status = 'finished';
+    // Store blink in a SEPARATE key (atomic, no race condition)
+    const blinkKey = `blink:${roomId}:${myRole}`;
+    await redis.set(blinkKey, String(blinkTime), { ex: PVP_ROOM_TTL });
+
+    // Wait briefly for concurrent blink from other player (same-camera testing)
+    await new Promise(r => setTimeout(r, 200));
+
+    // Read both blink keys (race-safe)
+    const p1BlinkStr = await redis.get(`blink:${roomId}:p1`);
+    const p2BlinkStr = await redis.get(`blink:${roomId}:p2`);
+    const p1Blink = p1BlinkStr ? Number(p1BlinkStr) : null;
+    const p2Blink = p2BlinkStr ? Number(p2BlinkStr) : null;
+
+    // Re-read room (might have been updated by concurrent request)
+    const freshRaw = await redis.get(`room:${roomId}`);
+    const freshRoom: PvpRoom = typeof freshRaw === 'string' ? JSON.parse(freshRaw) : freshRaw as PvpRoom;
+    if (freshRoom.winner) {
+      return NextResponse.json({ room: freshRoom });
     }
 
-    await redis.set(`room:${roomId}`, JSON.stringify(room), { ex: PVP_ROOM_TTL });
+    // Determine winner based on both blink keys
+    if (p1Blink !== null && p2Blink !== null) {
+      const diff = Math.abs(p1Blink - p2Blink);
+      freshRoom.p1_blinked = true;
+      freshRoom.p2_blinked = true;
+      freshRoom.p1_blinkTime = p1Blink;
+      freshRoom.p2_blinkTime = p2Blink;
+      if (diff <= PVP_DRAW_THRESHOLD) {
+        freshRoom.winner = 'draw';
+      } else if (p1Blink < p2Blink) {
+        freshRoom.winner = 'p2';
+      } else {
+        freshRoom.winner = 'p1';
+      }
+    } else if (p1Blink !== null) {
+      freshRoom.p1_blinked = true;
+      freshRoom.p1_blinkTime = p1Blink;
+      freshRoom.winner = 'p2';
+    } else if (p2Blink !== null) {
+      freshRoom.p2_blinked = true;
+      freshRoom.p2_blinkTime = p2Blink;
+      freshRoom.winner = 'p1';
+    }
 
-    return NextResponse.json({ room });
+    freshRoom.status = 'finished';
+    await redis.set(`room:${roomId}`, JSON.stringify(freshRoom), { ex: PVP_ROOM_TTL });
+
+    return NextResponse.json({ room: freshRoom });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
