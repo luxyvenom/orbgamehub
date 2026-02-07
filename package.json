@@ -12,7 +12,7 @@
     "start": "next start",
     "lint": "next lint",
     "compile": "node scripts/compile.cjs",
-    "deploy:testnet": "node scripts/compile.cjs && node scripts/deploy.cjs"
+    "deploy:mainnet": "node scripts/compile.cjs && node scripts/deploy.cjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.32",
