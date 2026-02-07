@@ -381,26 +381,24 @@ export default function PvpGamePage() {
       {/* Top safe zone */}
       <div style={{ height: '70px', flexShrink: 0 }} />
 
-      {/* Camera views (ready/countdown/playing) */}
-      {showCamera && (
-        <div className="flex flex-col flex-1 min-h-0">
-          <CameraView
-            videoRef={videoRef}
-            canvasRef={canvasRef}
-            isBlinking={isBlinking}
-            ear={ear}
-            label="YOU"
-            showEarBar={localPhase === 'playing'}
-          />
-          <VsBar gameTime={gameTime} isPlaying={localPhase === 'playing'} inGracePeriod={inGracePeriod} />
-          <OpponentView
-            type="pvp"
-            opponentName={opponentName}
-            opponentReady={opponentReady}
-            opponentBlinked={opponentBlinked}
-          />
-        </div>
-      )}
+      {/* Camera views (ready/countdown/playing) — always in DOM to preserve video ref */}
+      <div className="flex flex-col flex-1 min-h-0" style={{ display: showCamera ? 'flex' : 'none' }}>
+        <CameraView
+          videoRef={videoRef}
+          canvasRef={canvasRef}
+          isBlinking={isBlinking}
+          ear={ear}
+          label="YOU"
+          showEarBar={localPhase === 'playing'}
+        />
+        <VsBar gameTime={gameTime} isPlaying={localPhase === 'playing'} inGracePeriod={inGracePeriod} />
+        <OpponentView
+          type="pvp"
+          opponentName={opponentName}
+          opponentReady={opponentReady}
+          opponentBlinked={opponentBlinked}
+        />
+      </div>
 
       {localPhase === 'countdown' && <CountdownOverlay countdown={countdown} />}
       {localPhase === 'ready' && <ReadyOverlay isReady={isReady} faceDetected={faceDetected} />}

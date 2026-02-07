@@ -244,20 +244,18 @@ export default function AiModePage() {
     <div style={{ width: '393px', height: '852px', margin: '0 auto', display: 'flex', flexDirection: 'column', background: '#000000', color: '#ffffff', overflow: 'hidden', position: 'relative' }}>
       {/* Top safe zone */}
       <div style={{ height: '70px', flexShrink: 0 }} />
-      {showCamera && (
-        <div className="flex flex-col flex-1 min-h-0">
-          <CameraView
-            videoRef={videoRef}
-            canvasRef={canvasRef}
-            isBlinking={isBlinking}
-            ear={ear}
-            label="YOU"
-            showEarBar={phase === 'playing'}
-          />
-          <VsBar gameTime={gameTime} isPlaying={phase === 'playing'} inGracePeriod={inGracePeriod} />
-          <OpponentView type="ai" aiEyeOpen={aiEyeOpen} />
-        </div>
-      )}
+      <div className="flex flex-col flex-1 min-h-0" style={{ display: showCamera ? 'flex' : 'none' }}>
+        <CameraView
+          videoRef={videoRef}
+          canvasRef={canvasRef}
+          isBlinking={isBlinking}
+          ear={ear}
+          label="YOU"
+          showEarBar={phase === 'playing'}
+        />
+        <VsBar gameTime={gameTime} isPlaying={phase === 'playing'} inGracePeriod={inGracePeriod} />
+        <OpponentView type="ai" aiEyeOpen={aiEyeOpen} />
+      </div>
 
       {phase === 'countdown' && <CountdownOverlay countdown={countdown} />}
       {phase === 'ready' && <ReadyOverlay isReady={isReady} faceDetected={faceDetected} />}
